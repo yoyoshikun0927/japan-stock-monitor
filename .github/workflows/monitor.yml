@@ -1,0 +1,42 @@
+name: Japan Stock Monitor (10min, no notifications)
+on:
+  schedule:
+    - cron: '7,17,27,37,47,57 0-6 * * 1-5'
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: japan-stock-monitor-pages
+  cancel-in-progress: false
+jobs:
+  analyze-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      MONITOR_PASSPHRASE: ${{ secrets.MONITOR_PASSPHRASE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Smoke test
+        run: python monitor.py --smoke-test
+      - name: Analyze market
+        run: python monitor.py
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Upload encrypted dashboard
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
