@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>日本株 10分監視 | 個人用ダッシュボード</title>
+<style>
+:root{color-scheme:light;--bg:#f4f6fa;--text:#132437;--muted:#54667b;--line:#e0e6ef;--white:#fff;--accent:#215eae}
+*{box-sizing:border-box}body{font:15px/1.5 system-ui,-apple-system,"Hiragino Kaku Gothic ProN",sans-serif;margin:0;background:var(--bg);color:var(--text)}main{max-width:1200px;margin:auto;padding:18px}h1{font-size:24px;margin:12px 0}h2{font-size:17px}.lead,.muted{color:var(--muted)}.panel{background:var(--white);border:1px solid var(--line);border-radius:14px;padding:16px;margin:14px 0}.notice{border-left:4px solid #b07a2f;padding-left:12px}label{font-weight:600;display:block;margin-bottom:6px}input,button,select{font:inherit;max-width:100%}input{border:1px solid #9bacc1;padding:11px;border-radius:8px;width:270px}button{border:0;background:var(--accent);color:#fff;border-radius:8px;padding:11px 16px;cursor:pointer}button:disabled{opacity:.55}small{color:var(--muted)}.table{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:#fff}table{width:100%;min-width:1000px;border-collapse:collapse}th,td{padding:11px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}th{font-size:12px;background:#edf2f8;position:sticky;top:0}td{font-variant-numeric:tabular-nums}.stale,.unavailable{color:#b33c37}.reference_only{color:#21694d}.stats{display:flex;flex-wrap:wrap;gap:10px}.pill{background:#e8eef7;border-radius:8px;padding:9px 12px}#status{margin:12px 0;font-weight:600}#login button{margin-top:8px} .toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:14px 0}a{color:var(--accent)}
+</style></head><body><main>
+<h1>日本株 10分監視</h1><p class="lead">参考テクニカル分析 / iPhoneで閲覧 / プッシュ通知なし</p>
+<div class="panel notice">無料の非公式データを使用します。提供元の遅延は不定で、厳密な10分更新は保証されません。暗号化されたデータは、この画面で入力するパスフレーズを使ってiPhone内で復号します。自動売買や売買推奨は行いません。</div>
+<section class="panel" id="login"><h2>分析結果を開く</h2><label for="password">GitHub Secretsに設定した MONITOR_PASSPHRASE</label><input id="password" type="password" autocomplete="off" minlength="16" placeholder="16文字以上のパスフレーズ"><div><button id="unlock">復号して表示</button></div><small>パスフレーズはサーバーに送信せず、この画面内でのみ使用します。リロード後は再入力が必要です。</small><p id="status" role="status">データを読み込むにはパスフレーズを入力してください。</p></section>
+<section id="report" hidden><div class="panel"><h2>更新情報</h2><div class="stats"><span class="pill" id="generated"></span><span class="pill" id="summary"></span><span class="pill" id="age"></span></div><p class="muted" id="source"></p></div><div class="toolbar"><label for="filter">表示対象</label><select id="filter"><option value="all">全銘柄</option><option value="top">観測スコア上位20銘柄</option><option value="stale">古い・未取得データ</option></select><button type="button" id="refresh">最新結果を再取得</button></div><div class="table"><table><thead><tr><th>銘柄コード</th><th>参考値</th><th>確定5分足時刻</th><th>観測遅延</th><th>日足MA25</th><th>日足MA75</th><th>5分RCI9</th><th>5分RCI26</th><th>5分RSI14</th><th>観測点/50</th><th>状態</th></tr></thead><tbody id="rows"></tbody></table></div><p class="muted">観測点は一部のテクニカル条件の一致数です。業績・需給・ニュース・リスクは未採点で、総合推奨度ではありません。取引休場日・情報遅延・銘柄変更に注意してください。</p></section>
+<p class="muted"><a href="https://github.com/yoyoshikun0927/japan-stock-monitor" rel="noreferrer">ソースコードと運用説明</a></p>
+</main><script>
+let passphrase=null,report=null;
+const $=id=>document.getElementById(id);
+const num=x=>x===null||x===undefined||!Number.isFinite(Number(x))?'—':Number(x).toLocaleString('ja-JP',{maximumFractionDigits:3});
+const fmt=x=>x?new Date(x).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo',hour12:false}):'—';
+function status(message){$('status').textContent=message}
+function decodeB64(b64){return Uint8Array.from(atob(b64),c=>c.charCodeAt(0))}
+async function decrypt(envelope,password){
+ if(envelope.version!==1||envelope.cipher!=='AES-256-GCM'||envelope.kdf!=='PBKDF2-SHA256')throw Error('非対応の暗号化形式です');
+ const base=await crypto.subtle.importKey('raw',new TextEncoder().encode(password),'PBKDF2',false,['deriveKey']);
+ const key=await crypto.subtle.deriveKey({name:'PBKDF2',salt:decodeB64(envelope.salt),iterations:envelope.iterations,hash:'SHA-256'},base,{name:'AES-GCM',length:256},false,['decrypt']);
+ const plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:decodeB64(envelope.nonce)},key,decodeB64(envelope.ciphertext));
+ return JSON.parse(new TextDecoder().decode(plain));
+}
+async function load(){
+ if(!passphrase){status('パスフレーズが必要です');return}
+ status('暗号化データを取得しています…');
+ try{
+  const resp=await fetch('latest.enc.json?t='+Date.now(),{cache:'no-store'});
+  if(!resp.ok)throw Error(resp.status===404?'分析データが未生成です。READMEに従ってGitHub SecretsとActionsを設定してください。':'データ取得エラー '+resp.status);
+  report=await decrypt(await resp.json(),passphrase);
+  $('report').hidden=false;render();status('復号が完了しました。');
+ }catch(err){$('report').hidden=true;status(err.name==='OperationError'?'パスフレーズが違うか、暗号化データが壊れています。':String(err.message||err));}
+}
+function render(){if(!report)return;
+ const all=report.results||[],ready=all.filter(x=>x.status==='reference_only'),bad=all.filter(x=>x.status!=='reference_only');
+ const age=Math.round((Date.now()-Date.parse(report.generated_at))/60000);
+ $('generated').textContent='最終分析：'+fmt(report.generated_at);
+ $('summary').textContent='取得可能：'+(all.length-all.filter(x=>x.status==='unavailable').length)+' / '+all.length+'銘柄';
+ $('age').textContent='結果の経過：'+age+'分'+(age>30?'（古い可能性）':'');
+ $('source').textContent=report.data_provider+' / '+report.notice;
+ let rows=[...all],filter=$('filter').value;
+ if(filter==='top')rows=ready.sort((a,b)=>(b.watch_score_50||0)-(a.watch_score_50||0)).slice(0,20);
+ if(filter==='stale')rows=bad;
+ const tbody=$('rows');tbody.replaceChildren();
+ for(const r of rows){const tr=document.createElement('tr');
+  const vals=[r.code+' '+(r.name!==r.code?r.name:''),num(r.price),fmt(r.bar_time),r.observed_lag_minutes===undefined?'—':num(r.observed_lag_minutes)+'分',num(r.daily_ma25),num(r.daily_ma75),num(r.intra_rci9),num(r.intra_rci26),num(r.intra_rsi14),num(r.watch_score_50),r.status+' / '+(r.reason||'')];
+  for(let i=0;i<vals.length;i++){const td=document.createElement('td');td.textContent=vals[i];if(i===10)td.className=r.status;tr.appendChild(td)}tbody.appendChild(tr)}
+}
+$('unlock').addEventListener('click',()=>{passphrase=$('password').value;$('password').value='';load()});
+$('password').addEventListener('keydown',e=>{if(e.key==='Enter')$('unlock').click()});
+$('refresh').addEventListener('click',load);$('filter').addEventListener('change',render);
+// Refresh while this page remains open; no push notification or saved credentials.
+setInterval(()=>{if(passphrase)load()},10*60*1000);
+</script></body></html>
